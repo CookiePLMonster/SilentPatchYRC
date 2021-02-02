@@ -57,6 +57,24 @@ static HANDLE WINAPI CreateThread_SetDesc(LPSECURITY_ATTRIBUTES lpThreadAttribut
 	return result;
 }
 
+namespace MessagePumpFixes
+{
+	BOOL WINAPI PeekMessageA_WaitForMessages( LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax, UINT wRemoveMsg )
+	{
+		// This function is only ever called from a single thread, so a static variable is acceptable
+		static bool shouldWaitForMessages = false;
+
+		if ( std::exchange(shouldWaitForMessages, false) )
+		{
+			GetMessageA( lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax );
+			return TRUE; // GetMessage definitely processed a message
+		}
+
+		const BOOL result = PeekMessageA( lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg );
+		shouldWaitForMessages = result == FALSE;
+		return result;
+	}
+};
 
 
 void OnInitializeHook()
@@ -76,6 +94,36 @@ void OnInitializeHook()
 		void** funcPtr = hop->Pointer<void*>();
 		*funcPtr = &CreateThread_SetDesc;
 		WriteOffsetValue( addr, funcPtr );
+	}
+
+
+	// Message pump thread using less CPU time
+	if ( auto peekMessage = pattern( "FF 15 ? ? ? ? 85 C0 74 16" ).count(1); peekMessage.size() == 1 )
+	{
+		using namespace MessagePumpFixes;
+
+		auto match = peekMessage.get_one();
+		Trampoline* trampoline = Trampoline::MakeTrampoline( match.get<void*>() );
+
+		void** funcPtr = trampoline->Pointer<void*>();
+		*funcPtr = &PeekMessageA_WaitForMessages;
+		WriteOffsetValue( match.get<void*>( 2 ), funcPtr );
+
+		const uint8_t elseStatementPayload[] = {
+			0xFF, 0x15, 0x0, 0x0, 0x0, 0x0, // call ds:[DispatchMessageA]
+			0xE9, 0x0, 0x0, 0x0, 0x0 // jmp loc_1404CF4A0
+		};
+
+		auto space = reinterpret_cast<uint8_t*>(trampoline->Pointer<decltype(elseStatementPayload)>());
+		memcpy( space, elseStatementPayload, sizeof(elseStatementPayload) );
+
+		// Fill pointers accordingly and redirect to payload
+		void* orgDispatchMessage;
+		ReadOffsetValue( match.get<void*>( 0x1A + 2 ), orgDispatchMessage );
+		WriteOffsetValue( space + 2, orgDispatchMessage );
+		WriteOffsetValue( space + 6 + 1, match.get<void*>( -0x28 ) );
+
+		InjectHook( match.get<void*>( 0x1A ), space, PATCH_JUMP );
 	}
 
 }
