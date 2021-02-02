@@ -138,4 +138,40 @@ void OnInitializeHook()
 		}
 	}
 
+
+	// Post-battle race condition crash workaround
+	// HACK! A real fix is probably realistically not possible to do without
+	// the source access.
+	// The game crashes at
+	// movsx eax, word ptr [rdx+rcx*8]
+	// so add an early out from the job if rdx is 0
+	{
+		auto earlyOutPoint_pattern = pattern( "48 8B 57 18 41 8B C8" );
+		auto earlyOutJumpAddr_pattern = pattern( "B8 05 40 00 80 48 81 C4 E0 21 00 00" );
+		if ( earlyOutPoint_pattern.count(1).size() == 1 && earlyOutJumpAddr_pattern.count(1).size() == 1 )
+		{
+			auto earlyOutPoint = earlyOutPoint_pattern.get_first( 4 );
+			auto earlyOutJumpAddr = earlyOutJumpAddr_pattern.get_first();
+
+			Trampoline* trampoline = Trampoline::MakeTrampoline( earlyOutPoint );
+
+			const uint8_t payload[] = {
+				0x48, 0x85, 0xD2, // test rdx, rdx
+				0x0F, 0x84, 0x0, 0x0, 0x0, 0x0, // jz earlyOutJumpAddr
+				0x41, 0x8B, 0xC8, // mov ecx, r8d
+				0x48, 0x03, 0xC9, // add rcx, rcx
+				0xE9, 0x0, 0x0, 0x0, 0x0, // jmp earlyOutPoint+6
+			};
+
+			auto space = reinterpret_cast<uint8_t*>(trampoline->Pointer<decltype(payload)>());
+			memcpy( space, payload, sizeof(payload) );
+
+			// Fill pointers accordingly and redirect to payload
+			WriteOffsetValue( space + 3 + 2, earlyOutJumpAddr );
+			WriteOffsetValue( space + 3 + 6 + 3 + 3 + 1, reinterpret_cast<intptr_t>(earlyOutPoint) + 6 );
+
+			InjectHook( earlyOutPoint, space, PATCH_JUMP );
+		}
+	}
+
 }
