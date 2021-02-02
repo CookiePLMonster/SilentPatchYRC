@@ -76,6 +76,64 @@ namespace MessagePumpFixes
 	}
 };
 
+namespace ZeroSleepRemoval
+{
+	void Sleep_NoZero(DWORD dwMilliseconds)
+	{
+		Sleep(dwMilliseconds != 0 ? dwMilliseconds : 1);
+	}
+
+	DWORD SleepEx_NoZero(DWORD dwMilliseconds, BOOL bAlertable)
+	{
+		if (dwMilliseconds == 0)
+		{
+			Sleep(1);
+			return 0;
+		}
+		return SleepEx(dwMilliseconds, bAlertable);
+	}
+
+	void ReplacedYield()
+	{
+		SwitchToThread();
+	}
+}
+
+
+static void RedirectImports()
+{
+	const DWORD_PTR instance = reinterpret_cast<DWORD_PTR>(GetModuleHandle(nullptr));
+	const PIMAGE_NT_HEADERS ntHeader = reinterpret_cast<PIMAGE_NT_HEADERS>(instance + reinterpret_cast<PIMAGE_DOS_HEADER>(instance)->e_lfanew);
+
+	// Find IAT
+	PIMAGE_IMPORT_DESCRIPTOR pImports = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(instance + ntHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+
+	for ( ; pImports->Name != 0; pImports++ )
+	{
+		if ( _stricmp(reinterpret_cast<const char*>(instance + pImports->Name), "kernel32.dll") == 0 )
+		{
+			assert ( pImports->OriginalFirstThunk != 0 );
+
+			const PIMAGE_THUNK_DATA pFunctions = reinterpret_cast<PIMAGE_THUNK_DATA>(instance + pImports->OriginalFirstThunk);
+
+			for ( ptrdiff_t j = 0; pFunctions[j].u1.AddressOfData != 0; j++ )
+			{
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "Sleep") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = ZeroSleepRemoval::Sleep_NoZero;
+				}
+				else if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "SleepEx") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = ZeroSleepRemoval::SleepEx_NoZero;
+				}
+			}
+			
+		}
+	}
+}
+
 
 void OnInitializeHook()
 {
@@ -83,6 +141,8 @@ void OnInitializeHook()
 
 	using namespace Memory;
 	using namespace hook;
+
+	RedirectImports();
 	
 	// Restore thread names	
 	if ( auto createThreadPattern = pattern( "48 89 43 20 48 85 C0 74 5D" ).count(1); createThreadPattern.size() == 1 )
@@ -174,4 +234,12 @@ void OnInitializeHook()
 		}
 	}
 
+
+	// Sleepless frame limiter
+	if ( auto flSleep = pattern( "E8 ? ? ? ? BB 00 04 00 00" ).count(1); flSleep.size() == 1 )
+	{
+		auto match = flSleep.get_first();
+		Trampoline* trampoline = Trampoline::MakeTrampoline( match );
+		InjectHook( match, trampoline->Jump(ZeroSleepRemoval::ReplacedYield) );
+	}
 }
