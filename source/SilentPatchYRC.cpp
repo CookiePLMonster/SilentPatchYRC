@@ -126,4 +126,16 @@ void OnInitializeHook()
 		InjectHook( match.get<void*>( 0x1A ), space, PATCH_JUMP );
 	}
 
+
+	// Low level keyboard hook removed
+	{
+		auto setHook = pattern( "41 8D 49 0D" );
+		auto removeHook = pattern( "48 8B 0D ? ? ? ? FF 15 ? ? ? ? 33 C0" );
+		if ( setHook.count(1).size() == 1 && removeHook.count(1).size() == 1 )
+		{
+			Nop( setHook.get_first( 4 ), 6 );
+			Nop( removeHook.get_first( 7 ), 6 );
+		}
+	}
+
 }
