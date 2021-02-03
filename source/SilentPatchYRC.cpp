@@ -78,12 +78,12 @@ namespace MessagePumpFixes
 
 namespace ZeroSleepRemoval
 {
-	void Sleep_NoZero(DWORD dwMilliseconds)
+	void WINAPI Sleep_NoZero(DWORD dwMilliseconds)
 	{
 		Sleep(dwMilliseconds != 0 ? dwMilliseconds : 1);
 	}
 
-	DWORD SleepEx_NoZero(DWORD dwMilliseconds, BOOL bAlertable)
+	DWORD WINAPI SleepEx_NoZero(DWORD dwMilliseconds, BOOL bAlertable)
 	{
 		if (dwMilliseconds == 0)
 		{
@@ -94,6 +94,11 @@ namespace ZeroSleepRemoval
 	}
 
 	void ReplacedYield()
+	{
+		SwitchToThread();
+	}
+
+	void WINAPI SleepAsYield(DWORD /*dwMilliseconds*/)
 	{
 		SwitchToThread();
 	}
@@ -141,6 +146,32 @@ void OnInitializeHook()
 
 	using namespace Memory;
 	using namespace hook;
+
+	enum class Game
+	{
+		Yakuza3,
+		Yakuza4,
+		Yakuza5, // Unsupported for now
+	} game;
+	{
+		auto gameWindowName = pattern( "4C 8D 05 ? ? ? ? 48 8B 15 ? ? ? ? 33 DB" ).count(1);
+		if ( gameWindowName.size() == 1 )
+		{
+			// Read the window name from the pointer
+			void* match = gameWindowName.get_first( 3 );
+
+			const char* windowName;
+			ReadOffsetValue( match, windowName );
+			game = windowName == std::string_view("Yakuza 4") ? Game::Yakuza4 : Game::Yakuza3;
+		}
+		else
+		{
+			// Not found? Most likely Yakuza 5
+			// Not supported yet
+			game = Game::Yakuza5;
+		}
+	}
+
 
 	RedirectImports();
 	
@@ -235,11 +266,29 @@ void OnInitializeHook()
 	}
 
 
-	// Sleepless frame limiter
-	if ( auto flSleep = pattern( "E8 ? ? ? ? BB 00 04 00 00" ).count(1); flSleep.size() == 1 )
+	// Sleepless render idle
+	if ( auto renderSleep = pattern( "33 C9 FF 15 ? ? ? ? 48 8D 8D" ).count(1); renderSleep.size() == 1 )
 	{
-		auto match = flSleep.get_first();
+		auto match = renderSleep.get_first( 2 + 2 );
 		Trampoline* trampoline = Trampoline::MakeTrampoline( match );
-		InjectHook( match, trampoline->Jump(ZeroSleepRemoval::ReplacedYield) );
+
+		void** funcPtr = trampoline->Pointer<void*>();
+		*funcPtr = &ZeroSleepRemoval::SleepAsYield;
+
+		WriteOffsetValue( match, funcPtr );
+	}
+
+
+	// Sleepless gxd::server_job
+	// (Yakuza 4 only)
+	if ( game == Game::Yakuza4 )
+	{
+		auto serverJob = pattern( "E8 ? ? ? ? 83 3D ? ? ? ? ? 74 83" ).count(1);
+		if ( serverJob.size() == 1 )
+		{
+			auto match = serverJob.get_first();
+			Trampoline* trampoline = Trampoline::MakeTrampoline( match );
+			InjectHook( match, trampoline->Jump(ZeroSleepRemoval::ReplacedYield) );
+		}
 	}
 }
