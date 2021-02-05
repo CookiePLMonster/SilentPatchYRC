@@ -281,7 +281,8 @@ void OnInitializeHook()
 
 	// Sleepless gxd::server_job
 	// (Yakuza 4 only)
-	if ( game == Game::Yakuza4 )
+	// Also for Yakuza 3 for now, else causes slowdowns without Special K
+	//if ( game == Game::Yakuza4 )
 	{
 		auto serverJob = pattern( "E8 ? ? ? ? 83 3D ? ? ? ? ? 74 83" ).count(1);
 		if ( serverJob.size() == 1 )
