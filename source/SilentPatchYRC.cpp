@@ -230,7 +230,7 @@ void OnInitializeHook()
 			0xE9, 0x0, 0x0, 0x0, 0x0 // jmp loc_1404CF4A0
 		};
 
-		auto space = reinterpret_cast<uint8_t*>(trampoline->Pointer<decltype(elseStatementPayload)>());
+		std::byte* space = trampoline->RawSpace( sizeof(elseStatementPayload) );
 		memcpy( space, elseStatementPayload, sizeof(elseStatementPayload) );
 
 		// Fill pointers accordingly and redirect to payload
@@ -280,7 +280,7 @@ void OnInitializeHook()
 				0xE9, 0x0, 0x0, 0x0, 0x0, // jmp earlyOutPoint+6
 			};
 
-			auto space = reinterpret_cast<uint8_t*>(trampoline->Pointer<decltype(payload)>());
+			std::byte* space = trampoline->RawSpace( sizeof(payload) );
 			memcpy( space, payload, sizeof(payload) );
 
 			// Fill pointers accordingly and redirect to payload
