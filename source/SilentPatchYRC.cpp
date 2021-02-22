@@ -9,6 +9,11 @@
 #include "Utils/Trampoline.h"
 #include "Utils/Patterns.h"
 
+// Target game version
+// 0 - day 1 (28.01)
+// 1 - 1st patch (19.02)
+#define TARGET_VERSION			1
+
 
 //
 // Usage: SetThreadName ((DWORD)-1, "MainThread");
@@ -76,6 +81,7 @@ namespace MessagePumpFixes
 	}
 };
 
+#if TARGET_VERSION < 1 // High CPU usage thread – CPU usage has been cut down by ~30%.
 namespace ZeroSleepRemoval
 {
 	void WINAPI Sleep_NoZero(DWORD dwMilliseconds)
@@ -103,10 +109,12 @@ namespace ZeroSleepRemoval
 		SwitchToThread();
 	}
 }
+#endif
 
 
 static void RedirectImports()
 {
+#if TARGET_VERSION < 1 // High CPU usage thread – CPU usage has been cut down by ~30%.
 	const DWORD_PTR instance = reinterpret_cast<DWORD_PTR>(GetModuleHandle(nullptr));
 	const PIMAGE_NT_HEADERS ntHeader = reinterpret_cast<PIMAGE_NT_HEADERS>(instance + reinterpret_cast<PIMAGE_DOS_HEADER>(instance)->e_lfanew);
 
@@ -137,6 +145,7 @@ static void RedirectImports()
 			
 		}
 	}
+#endif
 }
 
 
@@ -230,6 +239,7 @@ void OnInitializeHook()
 	}
 
 
+#if TARGET_VERSION < 1 // Random crash when ending fights with Heat Move – we managed to fix a crash occurring occasionally after finishing battles with a Heat Action.
 	// Post-battle race condition crash workaround
 	// HACK! A real fix is probably realistically not possible to do without
 	// the source access.
@@ -264,8 +274,10 @@ void OnInitializeHook()
 			InjectHook( earlyOutPoint, space, PATCH_JUMP );
 		}
 	}
+#endif
 
 
+#if TARGET_VERSION < 1 // High CPU usage thread – CPU usage has been cut down by ~30%.
 	// Sleepless render idle
 	if ( auto renderSleep = pattern( "33 C9 FF 15 ? ? ? ? 48 8D 8D" ).count(1); renderSleep.size() == 1 )
 	{
@@ -292,4 +304,5 @@ void OnInitializeHook()
 			InjectHook( match, trampoline->Jump(ZeroSleepRemoval::ReplacedYield) );
 		}
 	}
+#endif
 }
