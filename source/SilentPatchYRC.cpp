@@ -111,6 +111,22 @@ namespace ZeroSleepRemoval
 }
 #endif
 
+namespace WinMainCmdLineFix
+{
+	int (WINAPI *orgWinMain)(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd);
+	int WINAPI WinMain_AlignCmdLine(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
+	{
+		std::string alignedCmdLine(lpCmdLine);
+
+		// Align the size to 16 bytes
+		const size_t size = alignedCmdLine.size();
+		const size_t alignedSize = size != 0 ? (size + 15) & ~15 : 16;
+		alignedCmdLine.resize( alignedSize );
+
+		return orgWinMain(hInstance, hPrevInstance, alignedCmdLine.data(), nShowCmd);
+	}
+}
+
 
 static void RedirectImports()
 {
@@ -305,4 +321,28 @@ void OnInitializeHook()
 		}
 	}
 #endif
+
+	// Work around read-past-bounds issues in WinMain
+	// Ideally, it should have been fixed by replacing buggy SSE-based string comparison,
+	// but padding the passed memory to 16 bytes fixes the root cause just fine
+	if ( auto winMain = pattern( "48 8D AC 24 B0 FD FF FF 48 81 EC 50 03 00 00 48 8B 05" ).count(1); winMain.size() == 1 )
+	{
+		using namespace WinMainCmdLineFix;
+
+		// Since Yakuza 3 and Yakuza 4 have slightly different WinMain prologues and very different callees,
+		// detour WinMain properly
+		auto match = winMain.get_one();
+		auto funcStart = match.get<void>( -5 );
+		Trampoline* trampoline = Trampoline::MakeTrampoline( funcStart );
+
+		std::byte* trampolineSpace = trampoline->RawSpace( 5 + 5 );
+		orgWinMain = reinterpret_cast<decltype(orgWinMain)>(trampolineSpace);
+
+		memcpy( trampolineSpace, funcStart, 5 );
+		trampolineSpace += 5;
+		InjectHook( trampolineSpace, match.get<void>(), PATCH_JUMP );
+
+		// Trampoline to the custom function
+		InjectHook( funcStart, trampoline->Jump(WinMain_AlignCmdLine), PATCH_JUMP );
+	}
 }
