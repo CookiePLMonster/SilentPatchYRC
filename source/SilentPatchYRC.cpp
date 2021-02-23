@@ -119,8 +119,8 @@ namespace WinMainCmdLineFix
 		std::string alignedCmdLine(lpCmdLine);
 
 		// Align the size to 16 bytes
-		const size_t size = alignedCmdLine.size();
-		const size_t alignedSize = size != 0 ? (size + 15) & ~15 : 16;
+		const size_t size = alignedCmdLine.size() + 1; // Include the null terminator in padding
+		const size_t alignedSize = (size + 15) & ~15;
 		alignedCmdLine.resize( alignedSize );
 
 		return orgWinMain(hInstance, hPrevInstance, alignedCmdLine.data(), nShowCmd);
