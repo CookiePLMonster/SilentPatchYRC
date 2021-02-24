@@ -1,13 +1,21 @@
-#define WIN32_LEAN_AND_MEAN
+﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 
 #define WINVER 0x0601
 #define _WIN32_WINNT 0x0601
 
 #include <windows.h>
+#include <ShlObj.h>
+
 #include "Utils/MemoryMgr.h"
 #include "Utils/Trampoline.h"
 #include "Utils/Patterns.h"
+
+#if _DEBUG
+#define DEBUG_DOCUMENTS_PATH	1
+#else
+#define DEBUG_DOCUMENTS_PATH	0
+#endif
 
 // Target game version
 // 0 - day 1 (28.01)
@@ -81,7 +89,7 @@ namespace MessagePumpFixes
 	}
 };
 
-#if TARGET_VERSION < 1 // High CPU usage thread � CPU usage has been cut down by ~30%.
+#if TARGET_VERSION < 1 // High CPU usage thread – CPU usage has been cut down by ~30%.
 namespace ZeroSleepRemoval
 {
 	void WINAPI Sleep_NoZero(DWORD dwMilliseconds)
@@ -127,10 +135,41 @@ namespace WinMainCmdLineFix
 	}
 }
 
+#if DEBUG_DOCUMENTS_PATH
+HRESULT WINAPI SHGetKnownFolderPath_Fake(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE hToken, PWSTR *ppszPath)
+{
+	if ( rfid == FOLDERID_Documents )
+	{
+		constexpr wchar_t debugPath[] = L"H:\\ŻąłóРстуぬねのはen\\🍪⟑η∏☉ⴤℹ︎∩₲ ₱⟑♰⫳🐱\\Docu Ments";
+		*ppszPath = static_cast<PWSTR>(CoTaskMemAlloc( sizeof(debugPath) ));
+		memcpy( *ppszPath, debugPath, sizeof(debugPath) );
+		return S_OK;
+	}
+
+	if ( rfid == FOLDERID_LocalAppData )
+	{
+		constexpr wchar_t debugPath[] = L"H:\\ŻąłóРстуぬねのはen\\🍪⟑η∏☉ⴤℹ︎∩₲ ₱⟑♰⫳🐱\\Lo Cal";
+		*ppszPath = static_cast<PWSTR>(CoTaskMemAlloc( sizeof(debugPath) ));
+		memcpy( *ppszPath, debugPath, sizeof(debugPath) );
+		return S_OK;
+	}
+
+	if ( rfid == FOLDERID_RoamingAppData )
+	{
+		constexpr wchar_t debugPath[] = L"H:\\ŻąłóРстуぬねのはen\\🍪⟑η∏☉ⴤℹ︎∩₲ ₱⟑♰⫳🐱\\Roa Ming";
+		*ppszPath = static_cast<PWSTR>(CoTaskMemAlloc( sizeof(debugPath) ));
+		memcpy( *ppszPath, debugPath, sizeof(debugPath) );
+		return S_OK;
+	}
+
+	return SHGetKnownFolderPath(rfid, dwFlags, hToken, ppszPath);
+}
+#endif
+
 
 static void RedirectImports()
 {
-#if TARGET_VERSION < 1 // High CPU usage thread � CPU usage has been cut down by ~30%.
+#if TARGET_VERSION < 1 || DEBUG_DOCUMENTS_PATH // High CPU usage thread – CPU usage has been cut down by ~30%.
 	const DWORD_PTR instance = reinterpret_cast<DWORD_PTR>(GetModuleHandle(nullptr));
 	const PIMAGE_NT_HEADERS ntHeader = reinterpret_cast<PIMAGE_NT_HEADERS>(instance + reinterpret_cast<PIMAGE_DOS_HEADER>(instance)->e_lfanew);
 
@@ -139,6 +178,7 @@ static void RedirectImports()
 
 	for ( ; pImports->Name != 0; pImports++ )
 	{
+#if TARGET_VERSION < 1 // High CPU usage thread – CPU usage has been cut down by ~30%.
 		if ( _stricmp(reinterpret_cast<const char*>(instance + pImports->Name), "kernel32.dll") == 0 )
 		{
 			assert ( pImports->OriginalFirstThunk != 0 );
@@ -158,8 +198,28 @@ static void RedirectImports()
 					*pAddress = ZeroSleepRemoval::SleepEx_NoZero;
 				}
 			}
-			
+			continue;
 		}
+#endif
+
+#if DEBUG_DOCUMENTS_PATH
+		if ( _stricmp(reinterpret_cast<const char*>(instance + pImports->Name), "shell32.dll") == 0 )
+		{
+			assert ( pImports->OriginalFirstThunk != 0 );
+
+			const PIMAGE_THUNK_DATA pFunctions = reinterpret_cast<PIMAGE_THUNK_DATA>(instance + pImports->OriginalFirstThunk);
+
+			for ( ptrdiff_t j = 0; pFunctions[j].u1.AddressOfData != 0; j++ )
+			{
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "SHGetKnownFolderPath") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = SHGetKnownFolderPath_Fake;
+				}
+			}
+			continue;
+		}
+#endif
 	}
 #endif
 }
@@ -255,7 +315,7 @@ void OnInitializeHook()
 	}
 
 
-#if TARGET_VERSION < 1 // Random crash when ending fights with Heat Move � we managed to fix a crash occurring occasionally after finishing battles with a Heat Action.
+#if TARGET_VERSION < 1 // Random crash when ending fights with Heat Move – we managed to fix a crash occurring occasionally after finishing battles with a Heat Action.
 	// Post-battle race condition crash workaround
 	// HACK! A real fix is probably realistically not possible to do without
 	// the source access.
@@ -293,7 +353,7 @@ void OnInitializeHook()
 #endif
 
 
-#if TARGET_VERSION < 1 // High CPU usage thread � CPU usage has been cut down by ~30%.
+#if TARGET_VERSION < 1 // High CPU usage thread – CPU usage has been cut down by ~30%.
 	// Sleepless render idle
 	if ( auto renderSleep = pattern( "33 C9 FF 15 ? ? ? ? 48 8D 8D" ).count(1); renderSleep.size() == 1 )
 	{
