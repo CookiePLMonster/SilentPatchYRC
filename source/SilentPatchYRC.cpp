@@ -261,9 +261,9 @@ void OnInitializeHook()
 	RedirectImports();
 	
 	// Restore thread names	
-	if ( auto createThreadPattern = pattern( "48 89 43 20 48 85 C0 74 5D" ).count(1); createThreadPattern.size() == 1 )
+	if ( auto createThreadPattern = pattern( "FF 15 ? ? ? ? 48 89 ? 20 48 85 C0 74 5D" ).count(1); createThreadPattern.size() == 1 )
 	{
-		auto addr = createThreadPattern.get_first( -6 + 2 );
+		auto addr = createThreadPattern.get_first( 2 );
 
 		Trampoline* hop = Trampoline::MakeTrampoline( addr );
 
