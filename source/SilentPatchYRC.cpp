@@ -135,6 +135,28 @@ namespace WinMainCmdLineFix
 	}
 }
 
+namespace LLKeyboardHookRemoval
+{
+	static const HHOOK FAKE_HHOOK = HHOOK(-1);
+	HHOOK SetWindowsHookExA_LLRemoval(int idHook, HOOKPROC lpfn, HINSTANCE hmod, DWORD dwThreadId)
+	{
+		if (idHook == WH_KEYBOARD_LL)
+		{
+			return FAKE_HHOOK;
+		}
+		return SetWindowsHookExA(idHook, lpfn, hmod, dwThreadId);
+	}
+
+	BOOL WINAPI UnhookWindowsHookEx_LLRemoval(HHOOK hhk)
+	{
+		if (hhk == FAKE_HHOOK)
+		{
+			return TRUE;
+		}
+		return UnhookWindowsHookEx(hhk);
+	}
+}
+
 #if DEBUG_DOCUMENTS_PATH
 HRESULT WINAPI SHGetKnownFolderPath_Fake(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE hToken, PWSTR *ppszPath)
 {
@@ -220,6 +242,31 @@ static void RedirectImports()
 			continue;
 		}
 #endif
+
+		// Low level keyboard hook removed
+		if ( _stricmp(reinterpret_cast<const char*>(instance + pImports->Name), "user32.dll") == 0 )
+		{
+			assert ( pImports->OriginalFirstThunk != 0 );
+
+			const PIMAGE_THUNK_DATA pFunctions = reinterpret_cast<PIMAGE_THUNK_DATA>(instance + pImports->OriginalFirstThunk);
+
+			for ( ptrdiff_t j = 0; pFunctions[j].u1.AddressOfData != 0; j++ )
+			{
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "SetWindowsHookExA") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = LLKeyboardHookRemoval::SetWindowsHookExA_LLRemoval;
+					continue;
+				}
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "UnhookWindowsHookEx") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = LLKeyboardHookRemoval::UnhookWindowsHookEx_LLRemoval;
+					continue;
+				}
+			}
+			continue;
+		}
 	}
 #endif
 }
@@ -300,18 +347,6 @@ void OnInitializeHook()
 		WriteOffsetValue( space + 6 + 1, match.get<void*>( -0x28 ) );
 
 		InjectHook( match.get<void*>( 0x1A ), space, PATCH_JUMP );
-	}
-
-
-	// Low level keyboard hook removed
-	{
-		auto setHook = pattern( "41 8D 49 0D" );
-		auto removeHook = pattern( "48 8B 0D ? ? ? ? FF 15 ? ? ? ? 33 C0" );
-		if ( setHook.count(1).size() == 1 && removeHook.count(1).size() == 1 )
-		{
-			Nop( setHook.get_first( 4 ), 6 );
-			Nop( removeHook.get_first( 7 ), 6 );
-		}
 	}
 
 
