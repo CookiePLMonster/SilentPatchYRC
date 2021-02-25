@@ -376,7 +376,7 @@ void OnInitializeHook()
 		Yakuza5, // Unsupported for now
 	} game;
 	{
-		auto gameWindowName = pattern( "4C 8D 05 ? ? ? ? 48 8B 15 ? ? ? ? 33 DB" ).count(1);
+		auto gameWindowName = pattern( "4C 8D 05 ? ? ? ? 48 8B 15 ? ? ? ? 33 DB" ).count_hint(1);
 		if ( gameWindowName.size() == 1 )
 		{
 			// Read the window name from the pointer
@@ -411,7 +411,7 @@ void OnInitializeHook()
 
 
 	// Message pump thread using less CPU time
-	if ( auto peekMessage = pattern( "FF 15 ? ? ? ? 85 C0 74 16" ).count(1); peekMessage.size() == 1 )
+	if ( auto peekMessage = pattern( "FF 15 ? ? ? ? 85 C0 74 16" ).count_hint(1); peekMessage.size() == 1 )
 	{
 		using namespace MessagePumpFixes;
 
@@ -510,24 +510,35 @@ void OnInitializeHook()
 	// Work around read-past-bounds issues in WinMain
 	// Ideally, it should have been fixed by replacing buggy SSE-based string comparison,
 	// but padding the passed memory to 16 bytes fixes the root cause just fine
-	if ( auto winMain = pattern( "48 8D AC 24 B0 FD FF FF 48 81 EC 50 03 00 00 48 8B 05" ).count(1); winMain.size() == 1 )
-	{
+	auto detourWinMain = [](hook::pattern& pattern, ptrdiff_t offset) {
 		using namespace WinMainCmdLineFix;
 
-		// Since Yakuza 3 and Yakuza 4 have slightly different WinMain prologues and very different callees,
+		// Since Yakuza 3, Yakuza 4 and Yakuza 5 have slightly different WinMain prologues and very different callees,
 		// detour WinMain properly
-		auto match = winMain.get_one();
-		auto funcStart = match.get<void>( -5 );
+		auto match = pattern.get_one();
+		auto funcStart = match.get<void>( -offset );
 		Trampoline* trampoline = Trampoline::MakeTrampoline( funcStart );
 
-		std::byte* trampolineSpace = trampoline->RawSpace( 5 + 5 );
+		std::byte* trampolineSpace = trampoline->RawSpace( offset + 5 );
 		orgWinMain = reinterpret_cast<decltype(orgWinMain)>(trampolineSpace);
 
-		memcpy( trampolineSpace, funcStart, 5 );
-		trampolineSpace += 5;
+		memcpy( trampolineSpace, funcStart, offset );
+		trampolineSpace += offset;
 		InjectHook( trampolineSpace, match.get<void>(), PATCH_JUMP );
 
 		// Trampoline to the custom function
 		InjectHook( funcStart, trampoline->Jump(WinMain_AlignCmdLine), PATCH_JUMP );
+	};
+
+	// Yakuza 3/4
+	if ( auto winMain3 = pattern( "48 8D AC 24 B0 FD FF FF 48 81 EC 50 03 00 00 48 8B 05" ).count_hint(1); winMain3.size() == 1 )
+	{
+		detourWinMain(winMain3, 5);
+	}
+	// Yakuza 5
+	else if ( auto winMain5 = pattern( "41 55 41 56 41 57 48 8D A8 78 FE FF FF 48 81 EC 60 02 00 00 48 C7 45 C0 FE FF FF FF 48 89 58 10 48 89 70 18 48 89 78 20 48 8B 05" ).count_hint(1);
+		winMain5.size() == 1 )
+	{
+		detourWinMain(winMain5, 6);
 	}
 }
