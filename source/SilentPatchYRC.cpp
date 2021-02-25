@@ -157,6 +157,64 @@ namespace LLKeyboardHookRemoval
 	}
 }
 
+namespace UTF8PathFixes
+{
+	static std::wstring UTF8ToWchar(std::string_view text)
+	{
+		std::wstring result;
+
+		const int count = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+		if ( count != 0 )
+		{
+			result.resize(count);
+			MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), count);
+		}
+
+		return result;
+	}
+
+	static std::string WcharToUTF8(std::wstring_view text)
+	{
+		std::string result;
+
+		const int count = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+		if ( count != 0 )
+		{
+			result.resize(count);
+			WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), count, nullptr, nullptr);
+		}
+
+		return result;
+	}
+
+	BOOL WINAPI CreateDirectoryUTF8(LPCSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes)
+	{
+		return CreateDirectoryW(UTF8ToWchar(lpPathName).c_str(), lpSecurityAttributes);
+	}
+
+	DWORD WINAPI GetFileAttributesUTF8(LPCSTR lpFileName)
+	{
+		return GetFileAttributesW(UTF8ToWchar(lpFileName).c_str());
+	}
+
+	HANDLE WINAPI CreateFileUTF8(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+				DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile)
+	{
+		return CreateFileW(UTF8ToWchar(lpFileName).c_str(), dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+	}
+
+	int WINAPI WideCharToMultiByte_UTF8(UINT CodePage, DWORD dwFlags, LPCWCH lpWideCharStr, int cchWideChar, LPSTR lpMultiByteStr, int cbMultiByte,
+		LPCCH lpDefaultChar, LPBOOL lpUsedDefaultChar)
+	{
+		return WideCharToMultiByte(CodePage != 0 ? CodePage : CP_UTF8, dwFlags, lpWideCharStr, cchWideChar, lpMultiByteStr, cbMultiByte, lpDefaultChar, lpUsedDefaultChar);
+	}
+
+	int WINAPI MultiByteToWideChar_UTF8(UINT CodePage, DWORD dwFlags, LPCCH lpMultiByteStr, int cbMultiByte, LPWSTR lpWideCharStr, int cchWideChar)
+	{
+		return MultiByteToWideChar(CodePage != 0 ? CodePage : CP_UTF8, dwFlags, lpMultiByteStr, cbMultiByte, lpWideCharStr, cchWideChar);
+	}
+}
+
 #if DEBUG_DOCUMENTS_PATH
 HRESULT WINAPI SHGetKnownFolderPath_Fake(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE hToken, PWSTR *ppszPath)
 {
@@ -191,7 +249,6 @@ HRESULT WINAPI SHGetKnownFolderPath_Fake(REFKNOWNFOLDERID rfid, DWORD dwFlags, H
 
 static void RedirectImports()
 {
-#if TARGET_VERSION < 1 || DEBUG_DOCUMENTS_PATH // High CPU usage thread – CPU usage has been cut down by ~30%.
 	const DWORD_PTR instance = reinterpret_cast<DWORD_PTR>(GetModuleHandle(nullptr));
 	const PIMAGE_NT_HEADERS ntHeader = reinterpret_cast<PIMAGE_NT_HEADERS>(instance + reinterpret_cast<PIMAGE_DOS_HEADER>(instance)->e_lfanew);
 
@@ -200,7 +257,6 @@ static void RedirectImports()
 
 	for ( ; pImports->Name != 0; pImports++ )
 	{
-#if TARGET_VERSION < 1 // High CPU usage thread – CPU usage has been cut down by ~30%.
 		if ( _stricmp(reinterpret_cast<const char*>(instance + pImports->Name), "kernel32.dll") == 0 )
 		{
 			assert ( pImports->OriginalFirstThunk != 0 );
@@ -209,20 +265,53 @@ static void RedirectImports()
 
 			for ( ptrdiff_t j = 0; pFunctions[j].u1.AddressOfData != 0; j++ )
 			{
+#if TARGET_VERSION < 1 // High CPU usage thread – CPU usage has been cut down by ~30%.
 				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "Sleep") == 0 )
 				{
 					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
 					*pAddress = ZeroSleepRemoval::Sleep_NoZero;
+					continue;
 				}
-				else if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "SleepEx") == 0 )
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "SleepEx") == 0 )
 				{
 					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
 					*pAddress = ZeroSleepRemoval::SleepEx_NoZero;
+					continue;
+				}
+#endif
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "CreateFileA") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = UTF8PathFixes::CreateFileUTF8;
+					continue;
+				}
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "CreateDirectoryA") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = UTF8PathFixes::CreateDirectoryUTF8;
+					continue;
+				}
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "GetFileAttributesA") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = UTF8PathFixes::GetFileAttributesUTF8;
+					continue;
+				}
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "WideCharToMultiByte") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = UTF8PathFixes::WideCharToMultiByte_UTF8;
+					continue;
+				}
+				if ( strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(instance + pFunctions[j].u1.AddressOfData)->Name, "MultiByteToWideChar") == 0 )
+				{
+					void** pAddress = reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+					*pAddress = UTF8PathFixes::MultiByteToWideChar_UTF8;
+					continue;
 				}
 			}
 			continue;
 		}
-#endif
 
 #if DEBUG_DOCUMENTS_PATH
 		if ( _stricmp(reinterpret_cast<const char*>(instance + pImports->Name), "shell32.dll") == 0 )
@@ -268,7 +357,6 @@ static void RedirectImports()
 			continue;
 		}
 	}
-#endif
 }
 
 
