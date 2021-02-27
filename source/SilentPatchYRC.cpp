@@ -215,6 +215,30 @@ namespace UTF8PathFixes
 	}
 }
 
+namespace RtResizeThreadFix
+{
+	HANDLE waitEvent;
+
+	static void** threadLoopReplacedVar;
+	void* ResizeThreadWait()
+	{
+		WaitForSingleObject(waitEvent, INFINITE);
+		return *threadLoopReplacedVar;
+	}
+
+	static uint32_t* terminateRtResizeThread;
+	void TerminateResizeThread()
+	{
+		InterlockedExchange(terminateRtResizeThread, 1);
+		SetEvent(waitEvent);
+	}
+
+	void SignalResolutionChange()
+	{
+		SetEvent(waitEvent);
+	}
+}
+
 #if DEBUG_DOCUMENTS_PATH
 HRESULT WINAPI SHGetKnownFolderPath_Fake(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE hToken, PWSTR *ppszPath)
 {
@@ -540,5 +564,67 @@ void OnInitializeHook()
 		winMain5.size() == 1 )
 	{
 		detourWinMain(winMain5, 6);
+	}
+
+
+	// Reduce CPU usage of a rt_resize_thread (Yakuza 5)
+	// Add an event waking up this thread to avoid it looping infinitely, burning CPU cycles
+	{
+		auto rtThreadLoop = pattern( "48 8B 05 ? ? ? ? 49 89 04 2F" );
+		auto signalRtThreadFinish = pattern( "87 35 ? ? ? ? 8B 05" );
+		auto signalResolutionChange = pattern( "C6 43 03 01 89 43 10" );
+		if ( rtThreadLoop.count_hint(1).size() == 1 && signalRtThreadFinish.count_hint(1).size() == 1 && signalResolutionChange.count_hint(1).size() == 1 )
+		{
+			using namespace RtResizeThreadFix;
+
+			// rt_resize_thread: Replace
+			// mov rax, cs:qword_141D955C0
+			// with a function call waiting and returning this variable
+			{
+				auto match = rtThreadLoop.get_one();
+				Trampoline* trampoline = Trampoline::MakeTrampoline( match.get<void>() );
+
+				ReadOffsetValue( match.get<void>( 3 ), threadLoopReplacedVar );
+				Nop( match.get<void>(), 2 );
+				InjectHook( match.get<void>( 2 ), trampoline->Jump(ResizeThreadWait), PATCH_CALL );
+			}
+
+			// WinMain: Replace
+			// xchg esi, cs:terminateRtResizeThread
+			// with a function call atomically setting this variable and waking up the event
+			{
+				auto match = signalRtThreadFinish.get_one();
+				Trampoline* trampoline = Trampoline::MakeTrampoline( match.get<void>() );
+
+				ReadOffsetValue( match.get<void>( 2 ), terminateRtResizeThread );
+				Nop( match.get<void>(), 1 );
+				InjectHook( match.get<void>( 1 ), trampoline->Jump(TerminateResizeThread), PATCH_CALL );
+			}
+
+			// sub_1413253B0: Detour
+			// mov byte ptr [rbx+3], 1
+			// mov [rbx+10h], eax
+			// to a trampoline and jump to wake up the event
+			{
+				auto match = signalResolutionChange.get_one();
+				Trampoline* trampoline = Trampoline::MakeTrampoline( match.get<void>() );
+
+				// Can't use trampoline->Jump as that overwrites rax!
+				std::byte* trampolineSpace = trampoline->RawSpace( 7 + 14 );
+				memcpy( trampolineSpace, match.get<void>(), 4 + 3 );
+				InjectHook( match.get<void>(), trampolineSpace, PATCH_CALL );
+				Nop( match.get<void>( 5 ), 2 );
+				trampolineSpace += 7;
+
+				const uint8_t jmpRip[] = { 0xFF, 0x25 };
+				memcpy( trampolineSpace, jmpRip, sizeof(jmpRip) );
+				trampolineSpace += 6; // Leave offset at 0
+
+				auto funcPtr = &SignalResolutionChange;
+				memcpy( trampolineSpace, &funcPtr, sizeof(funcPtr) );
+			}
+
+			waitEvent = CreateEvent(nullptr, FALSE, TRUE, nullptr);
+		}
 	}
 }
